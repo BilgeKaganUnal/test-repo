@@ -1,0 +1,69 @@
+name: TypeScript CI
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run TypeScript compiler
+        id: tsc
+        run: |
+          npm run tsc -- --noEmit || echo "TypeScript errors detected" > tsc-report.txt
+
+      - name: Run ESLint
+        id: eslint
+        run: |
+          npm run lint -- --output-file lint-report.txt
+
+      - name: Upload TypeScript report as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: tsc-report
+          path: tsc-report.txt
+          if-no-files-found: ignore
+
+      - name: Upload ESLint report as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: lint-report
+          path: lint-report.txt
+          if-no-files-found: ignore
+
+      - name: Set check status and comment on PR
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pullRequest = github.context.payload.pull_request;
+            if (pullRequest) {
+              github.rest.issues.createComment({
+                issue_number: pullRequest.number,
+                owner: github.context.repo.owner,
+                repo: github.context.repo.repo,
+                body: 'Type errors or linting violations detected. Please fix before merging.'
+              });
+              github.rest.checks.create({
+                owner: github.context.repo.owner,
+                repo: github.context.repo.repo,
+                name: 'TypeScript CI',
+                head_sha: pullRequest.head.sha,
+                status: 'completed',
+                conclusion: 'failure',
+                output: {
+                  title: 'Type errors or linting violations',
+                  summary: 'Please fix type errors and linting violations before merging.'
+                }
+              });
+            } else {
+              console.log('Not a pull request event. Skipping comment.');
+            }
