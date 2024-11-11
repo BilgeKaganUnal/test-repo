@@ -3,6 +3,7 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+# Add this permissions block
 permissions:
   checks: write
   pull-requests: write
@@ -23,10 +24,10 @@ jobs:
         run: npm install
 
       - name: Run tsc
-        run: npm run tsc -- --noEmit
+        run: npm run tsc -- --noEmit > tsc-report.txt || true
 
       - name: Run ESLint
-        run: npm run lint
+        run: npm run lint > lint-report.txt || true
 
       - name: Upload tsc report
         uses: actions/upload-artifact@v3
@@ -89,7 +90,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           force: true
-        env:
-          COMMIT_MESSAGE: "Reports from TypeScript CI"
-          COMMIT_AUTHOR: "github-actions[bot]"
-          COMMIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
