@@ -25,36 +25,27 @@ jobs:
       - name: Create reports directory
         run: mkdir -p reports
 
-      - name: Run tsc
+      - name: Run TypeScript check
         id: tsc
         run: |
-          npm run tsc -- --noEmit > reports/tsc-report.txt 2>&1
-          if [ $? -ne 0 ]; then
-            echo "TypeScript check failed"
-            echo "tsc_failed=true" >> $GITHUB_OUTPUT
-            cat reports/tsc-report.txt
-          else
-            echo "TypeScript check passed"
-            echo "tsc_failed=false" >> $GITHUB_OUTPUT
+          set -o pipefail  # This ensures pipe failures are caught
+          if ! npm run tsc -- --noEmit 2>&1 | tee reports/tsc-report.txt; then
+            echo "tsc_failed=true" >> $GITHUB_ENV
+            exit 1
           fi
-        continue-on-error: true
 
       - name: Run ESLint
         id: eslint
+        if: always() # Run even if TypeScript check failed
         run: |
-          npm run lint > reports/lint-report.txt 2>&1
-          if [ $? -ne 0 ]; then
-            echo "ESLint check failed"
-            echo "eslint_failed=true" >> $GITHUB_OUTPUT
-            cat reports/lint-report.txt
-          else
-            echo "ESLint check passed"
-            echo "eslint_failed=false" >> $GITHUB_OUTPUT
+          set -o pipefail  # This ensures pipe failures are caught
+          if ! npm run lint 2>&1 | tee reports/lint-report.txt; then
+            echo "eslint_failed=true" >> $GITHUB_ENV
+            exit 1
           fi
-        continue-on-error: true
 
       - name: Upload reports as artifacts
-        if: steps.tsc.outputs.tsc_failed == 'true' || steps.eslint.outputs.eslint_failed == 'true'
+        if: failure() # This will run only if any previous step failed
         uses: actions/upload-artifact@v3
         with:
           name: ci-reports
@@ -63,20 +54,14 @@ jobs:
             reports/lint-report.txt
           retention-days: 14
 
-      - name: Check for failures
-        if: steps.tsc.outputs.tsc_failed == 'true' || steps.eslint.outputs.eslint_failed == 'true'
-        run: |
-          echo "::error::TypeScript or ESLint checks failed. Check the reports for details."
-          exit 1
-
       - name: Comment on PR
-        if: steps.tsc.outputs.tsc_failed == 'true' || steps.eslint.outputs.eslint_failed == 'true'
+        if: failure() # This will run only if any previous step failed
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const tscFailed = '${{ steps.tsc.outputs.tsc_failed }}' === 'true';
-            const eslintFailed = '${{ steps.eslint.outputs.eslint_failed }}' === 'true';
+            const tscFailed = '${{ env.tsc_failed }}' === 'true';
+            const eslintFailed = '${{ env.eslint_failed }}' === 'true';
 
             let errorMessage = '❌ CI checks failed:\n\n';
             if (tscFailed) errorMessage += '- TypeScript compilation errors found\n';
@@ -91,34 +76,33 @@ jobs:
               body: errorMessage
             });
 
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'TypeScript CI',
-              head_sha: context.payload.pull_request.head.sha,
-              status: 'completed',
-              conclusion: 'failure',
-              output: {
-                title: 'Type checking and linting failed',
-                summary: errorMessage
-              }
-            });
-
-      - name: Create success check
-        if: steps.tsc.outputs.tsc_failed != 'true' && steps.eslint.outputs.eslint_failed != 'true'
+      - name: Report status
+        if: always() # This will always run
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const conclusion = process.env.tsc_failed === 'true' || process.env.eslint_failed === 'true' 
+              ? 'failure' 
+              : 'success';
+              
+            const title = conclusion === 'failure' 
+              ? 'Type checking or linting failed' 
+              : 'All checks passed';
+              
+            const summary = conclusion === 'failure'
+              ? 'Please fix the TypeScript or ESLint issues before merging.'
+              : '✅ TypeScript and ESLint checks passed successfully.';
+              
             await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               name: 'TypeScript CI',
               head_sha: context.payload.pull_request.head.sha,
               status: 'completed',
-              conclusion: 'success',
+              conclusion: conclusion,
               output: {
-                title: 'All checks passed',
-                summary: '✅ TypeScript and ESLint checks passed successfully.'
+                title: title,
+                summary: summary
               }
             });
