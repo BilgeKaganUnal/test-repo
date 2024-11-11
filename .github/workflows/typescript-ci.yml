@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref }} # Checkout the PR branch
+          ref: ${{ github.head_ref }}
 
       - name: Install dependencies
         run: npm install
@@ -29,7 +29,7 @@ jobs:
       - name: Run TypeScript check
         id: tsc
         run: |
-          set -o pipefail  # This ensures pipe failures are caught
+          set -o pipefail
           if ! npm run tsc -- --noEmit 2>&1 | tee reports/tsc-report.txt; then
             echo "tsc_failed=true" >> $GITHUB_ENV
             exit 1
@@ -37,16 +37,16 @@ jobs:
 
       - name: Run ESLint
         id: eslint
-        if: always() # Run even if TypeScript check failed
+        if: always()
         run: |
-          set -o pipefail  # This ensures pipe failures are caught
+          set -o pipefail
           if ! npm run lint 2>&1 | tee reports/lint-report.txt; then
             echo "eslint_failed=true" >> $GITHUB_ENV
             exit 1
           fi
 
       - name: Upload reports as artifacts
-        if: failure() # This will run only if any previous step failed
+        if: failure()
         uses: actions/upload-artifact@v3
         with:
           name: ci-reports
@@ -55,20 +55,31 @@ jobs:
             reports/lint-report.txt
           retention-days: 14
 
-      - name: Save reports to branch
-        if: failure() # Only save reports if there were failures
+      - name: Save reports to ci-reports branch
+        if: failure()
         run: |
           TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+          PR_NUMBER=$(echo $GITHUB_REF | cut -d'/' -f3)
+          REPORT_BRANCH="ci-reports"
 
-          # Create reports directory if it doesn't exist
-          mkdir -p reports/history
+          # Fetch or create ci-reports branch
+          if git fetch origin $REPORT_BRANCH; then
+            git checkout $REPORT_BRANCH
+          else
+            git checkout --orphan $REPORT_BRANCH
+            git rm -rf .
+            git commit --allow-empty -m "Initial commit for CI reports"
+          fi
+
+          # Create directory structure for this PR
+          mkdir -p "pr-$PR_NUMBER/history"
 
           # Copy the reports with timestamps
           for file in reports/*.txt; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               base="${filename%.*}"
-              cp "$file" "reports/history/${base}-${TIMESTAMP}.txt"
+              cp "$file" "pr-$PR_NUMBER/history/${base}-${TIMESTAMP}.txt"
             fi
           done
 
@@ -77,28 +88,28 @@ jobs:
           git config --local user.name "github-actions[bot]"
 
           # Add and commit the reports
-          git add reports/history/
-          git commit -m "Add CI reports from ${TIMESTAMP}"
-          git push origin ${{ github.head_ref }}
+          git add "pr-$PR_NUMBER/history/"
+          git commit -m "Add CI reports for PR #${PR_NUMBER} from ${TIMESTAMP} [skip ci]"
+          git push origin $REPORT_BRANCH
 
       - name: Comment on PR
-        if: failure() # This will run only if any previous step failed
+        if: failure()
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const tscFailed = '${{ env.tsc_failed }}' === 'true';
             const eslintFailed = '${{ env.eslint_failed }}' === 'true';
+            const prNumber = context.payload.pull_request.number;
 
             const repoUrl = context.payload.repository.html_url;
-            const branch = '${{ github.head_ref }}';
 
             let errorMessage = '❌ CI checks failed:\n\n';
             if (tscFailed) errorMessage += '- TypeScript compilation errors found\n';
             if (eslintFailed) errorMessage += '- ESLint violations found\n';
 
             errorMessage += '\nReports have been saved:\n';
-            errorMessage += `- [View Reports](${repoUrl}/tree/${branch}/reports/history)\n`;
+            errorMessage += `- [View Reports](${repoUrl}/tree/ci-reports/pr-${prNumber}/history)\n`;
             errorMessage += `- [Download Reports](${repoUrl}/actions/runs/${context.runId}/artifacts)\n\n`;
             errorMessage += 'Please fix the issues before merging.';
 
@@ -110,7 +121,7 @@ jobs:
             });
 
       - name: Report status
-        if: always() # This will always run
+        if: always()
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
