@@ -19,3 +19,5 @@ const invalidUser: UserType = {
 };
 
 processUser(invalidUser);
+
+console.log("Hello, world!");
