@@ -13,7 +13,47 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # Previous steps remain the same until Save reports...
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run TypeScript check
+        id: tsc
+        run: |
+          set -o pipefail
+          if ! npm run tsc -- --noEmit 2>&1 | tee reports/tsc-report.txt; then
+            echo "tsc_failed=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Run ESLint
+        id: eslint
+        if: always()
+        run: |
+          set -o pipefail
+          if ! npm run lint 2>&1 | tee reports/lint-report.txt; then
+            echo "eslint_failed=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Upload reports as artifacts
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: ci-reports
+          path: |
+            reports/tsc-report.txt
+            reports/lint-report.txt
+          retention-days: 14
 
       - name: Save reports to ci-reports branch
         if: failure()
@@ -64,4 +104,61 @@ jobs:
             echo "Created and pushed new branch"
           fi
 
-      # Rest of the steps remain the same...
+      - name: Comment on PR
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const tscFailed = '${{ env.tsc_failed }}' === 'true';
+            const eslintFailed = '${{ env.eslint_failed }}' === 'true';
+            const prNumber = context.payload.pull_request.number;
+
+            const repoUrl = context.payload.repository.html_url;
+
+            let errorMessage = '❌ CI checks failed:\n\n';
+            if (tscFailed) errorMessage += '- TypeScript compilation errors found\n';
+            if (eslintFailed) errorMessage += '- ESLint violations found\n';
+
+            errorMessage += '\nReports have been saved:\n';
+            errorMessage += `- [View Reports](${repoUrl}/tree/ci-reports/pr-${prNumber}/history)\n`;
+            errorMessage += `- [Download Reports](${repoUrl}/actions/runs/${context.runId}/artifacts)\n\n`;
+            errorMessage += 'Please fix the issues before merging.';
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: errorMessage
+            });
+
+      - name: Report status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const conclusion = process.env.tsc_failed === 'true' || process.env.eslint_failed === 'true' 
+              ? 'failure' 
+              : 'success';
+              
+            const title = conclusion === 'failure' 
+              ? 'Type checking or linting failed' 
+              : 'All checks passed';
+              
+            const summary = conclusion === 'failure'
+              ? 'Please fix the TypeScript or ESLint issues before merging.'
+              : '✅ TypeScript and ESLint checks passed successfully.';
+              
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'TypeScript CI',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: title,
+                summary: summary
+              }
+            });
