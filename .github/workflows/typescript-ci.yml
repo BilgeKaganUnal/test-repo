@@ -2,6 +2,13 @@ name: TypeScript CI
 on:
   pull_request:
     types: [opened, synchronize]
+
+permissions:
+  checks: write
+  pull-requests: write
+  contents: write
+  issues: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
