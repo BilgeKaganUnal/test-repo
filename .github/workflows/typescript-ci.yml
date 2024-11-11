@@ -3,7 +3,6 @@ on:
   pull_request:
     types: [opened, synchronize]
 
-# Add this permissions block
 permissions:
   checks: write
   pull-requests: write
@@ -23,70 +22,83 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Create reports directory
+        run: mkdir -p reports
+
       - name: Run tsc
-        run: npm run tsc -- --noEmit > tsc-report.txt || true
+        run: |
+          npm run tsc -- --noEmit > reports/tsc-report.txt 2>&1 || true
 
       - name: Run ESLint
-        run: npm run lint > lint-report.txt || true
+        run: |
+          npm run lint > reports/lint-report.txt 2>&1 || true
 
-      - name: Upload tsc report
+      - name: Upload reports as artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: tsc-report
-          path: tsc-report.txt
-          if-no-files-found: ignore
+          name: ci-reports
+          path: |
+            reports/tsc-report.txt
+            reports/lint-report.txt
+          if-no-files-found: warn
+          retention-days: 14
 
-      - name: Upload lint report
-        uses: actions/upload-artifact@v3
-        with:
-          name: lint-report
-          path: lint-report.txt
-          if-no-files-found: ignore
+      - name: Commit reports to repository
+        if: failure() || hashFiles('reports/*.txt') != ''
+        run: |
+          TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+          BRANCH_NAME="ci-reports/${GITHUB_HEAD_REF}-${TIMESTAMP}"
 
-      - name: Set check status
-        if: |
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          (hashFiles('tsc-report.txt') != '' || hashFiles('lint-report.txt') != '')
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Create and checkout new branch
+          git checkout -b $BRANCH_NAME
+
+          # Create reports directory if it doesn't exist
+          mkdir -p reports/history
+
+          # Copy reports with timestamps
+          for file in reports/*.txt; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              base="${filename%.*}"
+              cp "$file" "reports/history/${base}-${TIMESTAMP}.txt"
+            fi
+          done
+
+          # Commit and push if there are changes
+          if [ -n "$(git status --porcelain)" ]; then
+            git add reports/history/
+            git commit -m "CI Reports from ${TIMESTAMP}"
+            git push origin $BRANCH_NAME
+            
+            # Create or update PR comment with link to reports
+            echo "::set-output name=branch::$BRANCH_NAME"
+          fi
+
+      - name: Comment on PR
+        if: failure() && steps.commit-reports.outputs.branch != ''
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            github.rest.issues.createComment({
+            const branch = '${{ steps.commit-reports.outputs.branch }}';
+            const repoUrl = context.payload.repository.html_url;
+
+            const body = `
+            ❌ TypeScript CI checks failed. 
+
+            Reports have been uploaded:
+            - [View Reports Branch](${repoUrl}/tree/${branch}/reports/history)
+            - [Download Reports](${repoUrl}/actions/runs/${context.runId}/artifacts)
+
+            Please fix the issues before merging.
+            `;
+
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: 'Type errors or linting violations detected. Please fix before merging.'
-            })
-            github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'TypeScript CI',
-              head_sha: context.payload.pull_request.head.sha,
-              status: 'completed',
-              conclusion: 'failure',
-              output: {
-                title: 'Type errors or linting violations',
-                summary: 'Please fix type errors and linting violations before merging.'
-              }
-            })
-
-      - name: Checkout for reports
-        if: hashFiles('tsc-report.txt') != '' || hashFiles('lint-report.txt') != ''
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prepare reports
-        if: hashFiles('tsc-report.txt') != '' || hashFiles('lint-report.txt') != ''
-        run: |
-          mkdir -p reports
-          cp tsc-report.txt reports/tsc-report-$(date +"%Y%m%d-%H%M%S").txt
-          cp lint-report.txt reports/lint-report-$(date +"%Y%m%d-%H%M%S").txt
-
-      - name: Commit and push report artifacts
-        if: hashFiles('tsc-report.txt') != '' || hashFiles('lint-report.txt') != ''
-        uses: ad-m/github-push-action@v0.6.0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          force: true
+              body: body
+            });
