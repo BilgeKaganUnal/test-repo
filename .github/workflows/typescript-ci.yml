@@ -123,7 +123,6 @@ jobs:
 
             errorMessage += '\nReports have been saved:\n';
             errorMessage += `- [View Reports](${repoUrl}/tree/reports/pr-${prNumber})\n`;
-            errorMessage += `- [Download Reports](${repoUrl}/actions/runs/${context.runId}/artifacts)\n\n`;
             errorMessage += 'Please fix the issues before merging.';
 
             await github.rest.issues.createComment({
