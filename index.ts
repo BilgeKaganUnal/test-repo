@@ -1,22 +1,21 @@
-// A simple function that adds two numbers
-function add(a: number, b: number): number {
-  return a + b;
+import { UserType } from "./types";
+
+// This will cause a type error due to missing return type
+function processUser(user: UserType) {
+  // ESLint error: missing return type
+  const { firstName, lastName } = user;
+
+  // This will cause a lint error (unused variable)
+  const fullName = `${firstName} ${lastName}`;
+
+  // This will cause a type error (returning number when void is expected)
+  return 42;
 }
 
-// A basic interface
-interface Person {
-  name: string;
-  age: number;
-}
-
-// Creating an object using the Person interface
-const person: Person = {
-  name: "John",
-  age: 30,
+// This will cause a type error (missing required property)
+const invalidUser: UserType = {
+  firstName: "John",
+  // lastName is missing
 };
 
-// Logging the results to the console
-console.log("Sum of 5 and 10:", add(5, 10));
-console.log("Person:", person);
-console.log("testing");
-console.log("testing3");
+processUser(invalidUser);
