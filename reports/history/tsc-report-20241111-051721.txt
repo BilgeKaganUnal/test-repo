@@ -1,0 +1,5 @@
+
+> testing@1.0.0 tsc
+> tsc --noEmit
+
+index.ts(16,7): error TS2741: Property 'lastName' is missing in type '{ firstName: string; }' but required in type 'UserType'.
