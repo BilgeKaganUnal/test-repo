@@ -18,7 +18,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref }} # Checkout the PR branch
+          ref: ${{ github.head_ref }}
 
       - name: Install dependencies
         run: npm install
@@ -29,24 +29,39 @@ jobs:
       - name: Run TypeScript check
         id: tsc
         run: |
-          set -o pipefail  # This ensures pipe failures are caught
-          if ! npm run tsc -- --noEmit 2>&1 | tee reports/tsc-report.txt; then
+          npm run tsc -- --noEmit > reports/tsc-report.txt 2>&1
+          TSC_EXIT_CODE=$?
+          cat reports/tsc-report.txt
+          if [ $TSC_EXIT_CODE -ne 0 ]; then
+            echo "TypeScript check failed"
             echo "tsc_failed=true" >> $GITHUB_ENV
             exit 1
           fi
 
       - name: Run ESLint
         id: eslint
-        if: always() # Run even if TypeScript check failed
+        if: success() || failure() # Run even if TypeScript check failed
         run: |
-          set -o pipefail  # This ensures pipe failures are caught
-          if ! npm run lint 2>&1 | tee reports/lint-report.txt; then
+          npm run lint > reports/lint-report.txt 2>&1
+          ESLINT_EXIT_CODE=$?
+          cat reports/lint-report.txt
+          if [ $ESLINT_EXIT_CODE -ne 0 ]; then
+            echo "ESLint check failed"
             echo "eslint_failed=true" >> $GITHUB_ENV
             exit 1
           fi
 
+      - name: Process reports and set status
+        if: success() || failure() # Run regardless of previous steps
+        run: |
+          # Check if either report contains errors
+          if grep -q "error" reports/tsc-report.txt || grep -q "error" reports/lint-report.txt; then
+            echo "errors_found=true" >> $GITHUB_ENV
+            exit 1
+          fi
+
       - name: Upload reports as artifacts
-        if: failure() # This will run only if any previous step failed
+        if: env.errors_found == 'true'
         uses: actions/upload-artifact@v3
         with:
           name: ci-reports
@@ -56,11 +71,10 @@ jobs:
           retention-days: 14
 
       - name: Save reports to branch
-        if: failure() # Only save reports if there were failures
+        if: env.errors_found == 'true'
         run: |
           TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 
-          # Create reports directory if it doesn't exist
           mkdir -p reports/history
 
           # Copy the reports with timestamps
@@ -72,30 +86,32 @@ jobs:
             fi
           done
 
-          # Configure git
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          # Add and commit the reports
           git add reports/history/
-          git commit -m "Add CI reports from ${TIMESTAMP}"
+          git commit -m "Add CI reports from ${TIMESTAMP} [skip ci]"
           git push origin ${{ github.head_ref }}
 
       - name: Comment on PR
-        if: failure() # This will run only if any previous step failed
+        if: env.errors_found == 'true'
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const tscFailed = '${{ env.tsc_failed }}' === 'true';
-            const eslintFailed = '${{ env.eslint_failed }}' === 'true';
-
             const repoUrl = context.payload.repository.html_url;
             const branch = '${{ github.head_ref }}';
 
             let errorMessage = '❌ CI checks failed:\n\n';
-            if (tscFailed) errorMessage += '- TypeScript compilation errors found\n';
-            if (eslintFailed) errorMessage += '- ESLint violations found\n';
+            const tscContent = require('fs').readFileSync('reports/tsc-report.txt', 'utf8');
+            const eslintContent = require('fs').readFileSync('reports/lint-report.txt', 'utf8');
+
+            if (tscContent.includes('error')) {
+              errorMessage += '- TypeScript errors found\n';
+            }
+            if (eslintContent.includes('error')) {
+              errorMessage += '- ESLint violations found\n';
+            }
 
             errorMessage += '\nReports have been saved:\n';
             errorMessage += `- [View Reports](${repoUrl}/tree/${branch}/reports/history)\n`;
@@ -109,33 +125,34 @@ jobs:
               body: errorMessage
             });
 
-      - name: Report status
-        if: always() # This will always run
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const conclusion = process.env.tsc_failed === 'true' || process.env.eslint_failed === 'true' 
-              ? 'failure' 
-              : 'success';
-              
-            const title = conclusion === 'failure' 
-              ? 'Type checking or linting failed' 
-              : 'All checks passed';
-              
-            const summary = conclusion === 'failure'
-              ? 'Please fix the TypeScript or ESLint issues before merging.'
-              : '✅ TypeScript and ESLint checks passed successfully.';
-              
             await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               name: 'TypeScript CI',
               head_sha: context.payload.pull_request.head.sha,
               status: 'completed',
-              conclusion: conclusion,
+              conclusion: 'failure',
               output: {
-                title: title,
-                summary: summary
+                title: 'Type checking or linting failed',
+                summary: errorMessage
+              }
+            });
+
+      - name: Report success
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'TypeScript CI',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: 'success',
+              output: {
+                title: 'All checks passed',
+                summary: '✅ TypeScript and ESLint checks passed successfully.'
               }
             });
