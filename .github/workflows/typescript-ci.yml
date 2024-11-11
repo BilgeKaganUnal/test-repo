@@ -64,29 +64,35 @@ jobs:
 
           TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
           PR_NUMBER=$(echo $GITHUB_REF | cut -d'/' -f3)
-          REPORT_BRANCH="ci-reports"
+          PR_BRANCH=${{ github.head_ref }}
+          REPORT_BRANCH="reports/pr-${PR_NUMBER}"
 
           # Create and switch to a temporary branch
-          git checkout --orphan temp_$REPORT_BRANCH
+          git checkout --orphan temp_branch
 
           # Clear the working directory except for reports
           git rm -rf --cached .
           find . -mindepth 1 -maxdepth 1 ! -name 'reports' ! -name '.git' -exec rm -rf {} +
 
-          # Create directory structure for this PR
-          mkdir -p "pr-$PR_NUMBER/history"
+          # Create directory structure
+          mkdir -p "history"
 
           # Copy the reports with timestamps
           for file in reports/*.txt; do
             if [ -f "$file" ]; then
               filename=$(basename "$file")
               base="${filename%.*}"
-              cp "$file" "pr-$PR_NUMBER/history/${base}-${TIMESTAMP}.txt"
+              cp "$file" "history/${base}-${TIMESTAMP}.txt"
             fi
           done
 
-          # Stage and commit the reports
-          git add "pr-$PR_NUMBER/history/"
+          # Create summary file
+          echo "# CI Reports for PR #${PR_NUMBER}" > README.md
+          echo "Branch: ${PR_BRANCH}" >> README.md
+          echo "Last Updated: $(date)" >> README.md
+
+          # Stage and commit everything
+          git add history/ README.md
 
           # Create commit only if there are changes
           if git status --porcelain | grep .; then
@@ -96,13 +102,8 @@ jobs:
             exit 0
           fi
 
-          # Try to push to existing branch or create new one
-          if git push origin temp_$REPORT_BRANCH:$REPORT_BRANCH; then
-            echo "Pushed to existing branch"
-          else
-            git push --force origin temp_$REPORT_BRANCH:$REPORT_BRANCH
-            echo "Created and pushed new branch"
-          fi
+          # Force push to PR-specific branch
+          git push --force origin temp_branch:$REPORT_BRANCH
 
       - name: Comment on PR
         if: failure()
@@ -121,7 +122,7 @@ jobs:
             if (eslintFailed) errorMessage += '- ESLint violations found\n';
 
             errorMessage += '\nReports have been saved:\n';
-            errorMessage += `- [View Reports](${repoUrl}/tree/ci-reports/pr-${prNumber}/history)\n`;
+            errorMessage += `- [View Reports](${repoUrl}/tree/reports/pr-${prNumber})\n`;
             errorMessage += `- [Download Reports](${repoUrl}/actions/runs/${context.runId}/artifacts)\n\n`;
             errorMessage += 'Please fix the issues before merging.';
 
